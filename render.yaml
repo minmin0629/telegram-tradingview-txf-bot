@@ -1,0 +1,13 @@
+
+services:
+  - type: web
+    name: tv-telegram-bot
+    env: python
+    plan: free
+    buildCommand: ""
+    startCommand: "python app/app.py"
+    envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: CHAT_ID
+        sync: false
