@@ -1,0 +1,52 @@
+
+name: render control (resume/suspend by TW futures hours)
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # every 5 minutes (UTC)
+  workflow_dispatch:
+
+jobs:
+  control:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide desired state by Taipei time
+        id: decide
+        run: |
+          DOW=$(TZ='Asia/Taipei' date +%u)
+          HM=$(TZ='Asia/Taipei' date +%H%M)
+          desired="suspend"
+          in_range () { x=$1; a=$2; b=$3; [ "$x" -ge "$a" ] && [ "$x" -le "$b" ]; }
+
+          if [ "$DOW" -ge 1 ] && [ "$DOW" -le 5 ]; then
+            # Day session 08:45–13:45 Mon–Fri
+            if in_range "$HM" 0845 1345; then desired="resume"; fi
+
+            # Night sessions Mon–Thu 15:00–23:59
+            if [ "$DOW" -ge 1 ] && [ "$DOW" -le 4 ] && in_range "$HM" 1500 2359; then desired="resume"; fi
+
+            # Night carry Tue–Fri 00:00–05:00
+            if [ "$DOW" -ge 2 ] && [ "$DOW" -le 5 ] && in_range "$HM" 0000 0500; then desired="resume"; fi
+
+            # Friday night 15:00–00:00 (stay resume if within 1500-2359 on Fri)
+            if [ "$DOW" -eq 5 ] && in_range "$HM" 1500 2359; then desired="resume"; fi
+          fi
+
+          echo "desired=$desired" >> $GITHUB_OUTPUT
+
+      - name: Apply desired state via Render GraphQL API
+        if: steps.decide.outputs.desired == 'resume' || steps.decide.outputs.desired == 'suspend'
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+          DESIRED: ${{ steps.decide.outputs.desired }}
+        run: |
+          if [ -z "$RENDER_API_KEY" ] || [ -z "$RENDER_SERVICE_ID" ]; then
+            echo "Missing RENDER_API_KEY or RENDER_SERVICE_ID"; exit 1;
+          fi
+          if [ "$DESIRED" = "resume" ]; then
+            MUT='mutation($id:ID!){ resumeService(id:$id){ id name suspended }}'
+          else
+            MUT='mutation($id:ID!){ suspendService(id:$id){ id name suspended }}'
+          fi
+          curl -sS https://api.render.com/v1/graphql             -H "Authorization: Bearer $RENDER_API_KEY"             -H "Content-Type: application/json"             -d '{"query":"'"$MUT"'","variables":{"id":"'"$RENDER_SERVICE_ID"'"}}'

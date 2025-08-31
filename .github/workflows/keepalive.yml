@@ -1,0 +1,47 @@
+
+name: keepalive ping during TW futures hours
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # every 5 minutes (UTC)
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide by Taipei time and ping if active
+        env:
+          PING_URL: ${{ secrets.PING_URL }}
+        run: |
+          if [ -z "$PING_URL" ]; then
+            echo "PING_URL secret not set"; exit 1;
+          fi
+          DOW=$(TZ='Asia/Taipei' date +%u)      # 1=Mon ... 7=Sun
+          HM=$(TZ='Asia/Taipei' date +%H%M)     # e.g., 0930
+          echo "TW DOW=$DOW HM=$HM"
+          active=false
+
+          in_range () { x=$1; a=$2; b=$3; [ "$x" -ge "$a" ] && [ "$x" -le "$b" ]; }
+
+          if [ "$DOW" -ge 1 ] && [ "$DOW" -le 5 ]; then
+            # Day session 08:45–13:45 Mon–Fri
+            if in_range "$HM" 0845 1345; then active=true; fi
+
+            # Night sessions:
+            # Mon–Thu nights 15:00–23:59 (same calendar day)
+            if [ "$DOW" -ge 1 ] && [ "$DOW" -le 4 ] && in_range "$HM" 1500 2359; then active=true; fi
+
+            # Night carry mornings Tue–Fri 00:00–05:00 (these are early mornings of Tue–Fri)
+            if [ "$DOW" -ge 2 ] && [ "$DOW" -le 5 ] && in_range "$HM" 0000 0500; then active=true; fi
+
+            # Friday night 15:00–00:00 (no carry past midnight)
+            if [ "$DOW" -eq 5 ] && in_range "$HM" 1500 2359; then active=true; fi
+          fi
+
+          if [ "$active" = true ]; then
+            echo "Active trading hours → ping $PING_URL"
+            curl -sS -m 10 "$PING_URL" || true
+          else
+            echo "Outside trading hours → skipping ping"
+          fi
